@@ -205,19 +205,18 @@ func TestE2E_FullWorkflow(t *testing.T) {
 	gotExport := decodeJSON[api.ExportResponse](t, resp)
 	assert.Equal(t, jobID, gotExport.ID)
 
-	// 11. Download before completion should fail.
-	resp = env.doRequest(t, "GET", "/tenants/"+tenantID+"/exports/"+jobID+"/download", tenantKey, nil)
+	// 11. Download before file exists should fail.
+	resp = env.doRequest(t, "GET", "/tenants/"+tenantID+"/export/download", tenantKey, nil)
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	resp.Body.Close()
 
-	// 12. Mark export completed and create the file.
-	require.NoError(t, env.store.Jobs.SetCompleted(context.Background(), jobID, ""))
+	// 12. Create the export file on disk.
 	exportDir := filepath.Join(env.dataDir, "tenants", tenantID, "export")
 	require.NoError(t, os.MkdirAll(exportDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(exportDir, "slackdump.sqlite"), []byte("sqlite-data"), 0o644))
 
-	// 13. Download completed export.
-	resp = env.doRequest(t, "GET", "/tenants/"+tenantID+"/exports/"+jobID+"/download", tenantKey, nil)
+	// 13. Download export.
+	resp = env.doRequest(t, "GET", "/tenants/"+tenantID+"/export/download", tenantKey, nil)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
@@ -284,7 +283,7 @@ func TestE2E_Auth_NoToken(t *testing.T) {
 		{"POST", "/tenants/some-id/exports"},
 		{"GET", "/tenants/some-id/exports"},
 		{"GET", "/tenants/some-id/exports/some-job"},
-		{"GET", "/tenants/some-id/exports/some-job/download"},
+		{"GET", "/tenants/some-id/export/download"},
 	}
 
 	for _, ep := range endpoints {
@@ -549,19 +548,13 @@ func TestE2E_DownloadWrongTenant(t *testing.T) {
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	attacker := decodeJSON[api.TenantResponse](t, resp)
 
-	// Create export for owner.
-	resp = env.doRequest(t, "POST", "/tenants/"+owner.ID+"/exports", owner.APIKey, api.ExportRequest{})
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-	export := decodeJSON[api.ExportResponse](t, resp)
-
-	// Complete the export and create the file.
-	require.NoError(t, env.store.Jobs.SetCompleted(context.Background(), export.ID, ""))
+	// Create the export file on disk for owner.
 	exportDir := filepath.Join(env.dataDir, "tenants", owner.ID, "export")
 	require.NoError(t, os.MkdirAll(exportDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(exportDir, "slackdump.sqlite"), []byte("secret-data"), 0o644))
 
 	// Attacker tries to download owner's export via owner's tenant URL.
-	resp = env.doRequest(t, "GET", "/tenants/"+owner.ID+"/exports/"+export.ID+"/download", attacker.APIKey, nil)
+	resp = env.doRequest(t, "GET", "/tenants/"+owner.ID+"/export/download", attacker.APIKey, nil)
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 	resp.Body.Close()
 }

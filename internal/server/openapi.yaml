@@ -280,17 +280,15 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
-  /tenants/{id}/exports/{job_id}/download:
+  /tenants/{id}/export/download:
     parameters:
       - $ref: '#/components/parameters/TenantID'
-      - $ref: '#/components/parameters/JobID'
     get:
       tags: [Downloads]
-      summary: Download completed export
+      summary: Download export
       description: |
-        Downloads the export archive as a SQLite database file. The export
-        must have status `completed`. Returns 404 if the export is still
-        running or has failed.
+        Downloads the export archive as a SQLite database file.
+        Returns 404 if the export file does not exist on disk.
       responses:
         '200':
           description: Export file
@@ -309,7 +307,7 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          description: Export not found, not completed, or file missing
+          description: Export file not found
           content:
             application/json:
               schema:

@@ -63,7 +63,7 @@ func (s *Server) routes() chi.Router {
 		tenantH := api.NewTenantHandler(s.store, s.cfg.EncryptionKey, s.validator, s.engine)
 		apikeyH := api.NewAPIKeyHandler(s.store)
 		exportH := api.NewExportHandler(s.store, s.engine)
-		downloadH := api.NewDownloadHandler(s.store, s.cfg.DataDir)
+		downloadH := api.NewDownloadHandler(s.cfg.DataDir)
 
 		r.Route("/tenants", func(r chi.Router) {
 			r.With(AdminOnly(s.cfg.AdminKey)).Post("/", tenantH.Create)
@@ -75,7 +75,7 @@ func (s *Server) routes() chi.Router {
 				r.Post("/exports", exportH.Create)
 				r.Get("/exports", exportH.List)
 				r.Get("/exports/{job_id}", exportH.Get)
-				r.Get("/exports/{job_id}/download", downloadH.Download)
+				r.Get("/export/download", downloadH.Download)
 			})
 		})
 	})

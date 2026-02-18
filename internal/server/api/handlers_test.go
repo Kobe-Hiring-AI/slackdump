@@ -378,29 +378,16 @@ func TestExportHandler_Get_WrongTenant(t *testing.T) {
 }
 
 func TestDownloadHandler_Download(t *testing.T) {
-	s := testStore(t)
 	dataDir := t.TempDir()
-	h := NewDownloadHandler(s, dataDir)
-
-	tenant := &store.Tenant{ID: "t-1", Name: "Test", Workspace: "ws", TeamID: "T1"}
-	require.NoError(t, s.Tenants.Create(context.Background(), tenant))
-
-	job := &store.ExportJob{
-		ID:          "j-1",
-		TenantID:    "t-1",
-		Channels:    "general",
-		TriggeredBy: "api",
-	}
-	require.NoError(t, s.Jobs.Create(context.Background(), job))
-	require.NoError(t, s.Jobs.SetCompleted(context.Background(), "j-1", ""))
+	h := NewDownloadHandler(dataDir)
 
 	// Create the file.
 	exportDir := filepath.Join(dataDir, "tenants", "t-1", "export")
 	require.NoError(t, os.MkdirAll(exportDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(exportDir, "slackdump.sqlite"), []byte("test-data"), 0o644))
 
-	req := httptest.NewRequest(http.MethodGet, "/tenants/t-1/exports/j-1/download", nil)
-	req = withChiParams(req, map[string]string{"id": "t-1", "job_id": "j-1"})
+	req := httptest.NewRequest(http.MethodGet, "/tenants/t-1/export/download", nil)
+	req = withChiParams(req, map[string]string{"id": "t-1"})
 	rec := httptest.NewRecorder()
 
 	h.Download(rec, req)
@@ -409,48 +396,11 @@ func TestDownloadHandler_Download(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "test-data")
 }
 
-func TestDownloadHandler_Download_NotCompleted(t *testing.T) {
-	s := testStore(t)
-	h := NewDownloadHandler(s, t.TempDir())
-
-	tenant := &store.Tenant{ID: "t-1", Name: "Test", Workspace: "ws", TeamID: "T1"}
-	require.NoError(t, s.Tenants.Create(context.Background(), tenant))
-
-	job := &store.ExportJob{
-		ID:          "j-1",
-		TenantID:    "t-1",
-		Channels:    "general",
-		TriggeredBy: "api",
-	}
-	require.NoError(t, s.Jobs.Create(context.Background(), job))
-
-	req := httptest.NewRequest(http.MethodGet, "/tenants/t-1/exports/j-1/download", nil)
-	req = withChiParams(req, map[string]string{"id": "t-1", "job_id": "j-1"})
-	rec := httptest.NewRecorder()
-
-	h.Download(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
 func TestDownloadHandler_Download_FileNotFound(t *testing.T) {
-	s := testStore(t)
-	h := NewDownloadHandler(s, t.TempDir())
+	h := NewDownloadHandler(t.TempDir())
 
-	tenant := &store.Tenant{ID: "t-1", Name: "Test", Workspace: "ws", TeamID: "T1"}
-	require.NoError(t, s.Tenants.Create(context.Background(), tenant))
-
-	job := &store.ExportJob{
-		ID:          "j-1",
-		TenantID:    "t-1",
-		Channels:    "general",
-		TriggeredBy: "api",
-	}
-	require.NoError(t, s.Jobs.Create(context.Background(), job))
-	require.NoError(t, s.Jobs.SetCompleted(context.Background(), "j-1", ""))
-
-	req := httptest.NewRequest(http.MethodGet, "/tenants/t-1/exports/j-1/download", nil)
-	req = withChiParams(req, map[string]string{"id": "t-1", "job_id": "j-1"})
+	req := httptest.NewRequest(http.MethodGet, "/tenants/t-1/export/download", nil)
+	req = withChiParams(req, map[string]string{"id": "t-1"})
 	rec := httptest.NewRecorder()
 
 	h.Download(rec, req)
