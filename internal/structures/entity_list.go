@@ -257,6 +257,9 @@ func TimeParse(s string) (t time.Time, err error) {
 // Index returns a map where key is entity, and value show if the entity
 // should be processed (true) or not (false).
 func (el *EntityList) Index() map[string]*EntityItem {
+	if el == nil {
+		return nil
+	}
 	el.mu.RLock()
 	defer el.mu.RUnlock()
 	return el.index
@@ -290,11 +293,17 @@ func (ei EntityIndex) IsIncluded(ent string) bool {
 
 // HasIncludes returns true if there's any included entities.
 func (el *EntityList) HasIncludes() bool {
+	if el == nil {
+		return false
+	}
 	return el.hasIncludes
 }
 
 // HasExcludes returns true if there's any excluded entities.
 func (el *EntityList) HasExcludes() bool {
+	if el == nil {
+		return false
+	}
 	return el.hasExcludes
 }
 

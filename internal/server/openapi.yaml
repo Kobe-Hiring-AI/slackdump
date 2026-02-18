@@ -1,0 +1,526 @@
+openapi: 3.0.3
+info:
+  title: Slackdump Server API
+  description: |
+    Multi-tenant REST API for managing Slack workspace exports.
+
+    Each tenant stores their Slack credentials, gets their own data directory,
+    and can trigger exports that run in background goroutines. A scheduler can
+    automatically run daily exports with random jitter.
+
+    ## Authentication
+
+    All endpoints require a Bearer token in the `Authorization` header.
+
+    - **Admin key**: Set via `SLACKDUMP_ADMIN_KEY`. Required for tenant registration and deletion.
+    - **Tenant API key**: Generated when a tenant is created. Used for all tenant-scoped operations.
+  version: 1.0.0
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Tenants
+    description: Tenant registration and management
+  - name: API Keys
+    description: Per-tenant API key management
+  - name: Exports
+    description: Slack workspace export jobs
+  - name: Downloads
+    description: Download completed export archives
+
+paths:
+  /tenants:
+    post:
+      tags: [Tenants]
+      summary: Register a new tenant
+      description: |
+        Creates a new tenant with the given Slack credentials. The credentials
+        are validated by calling the Slack API before storing. Returns the
+        tenant info along with an initial API key (shown only once).
+
+        An initial full-workspace export is automatically triggered upon
+        tenant creation (triggered_by: `tenant-create`).
+
+        **Requires admin authentication.**
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TenantRequest'
+            examples:
+              token_and_cookie:
+                summary: Token + cookie mode
+                value:
+                  name: my-workspace
+                  slack_token: xoxc-...
+                  slack_cookie: xoxd-...
+              cookie_only:
+                summary: Cookie-only mode (token derived automatically)
+                value:
+                  name: my-workspace
+                  workspace: kobe-ai
+                  slack_cookie: xoxd-...
+      responses:
+        '201':
+          description: Tenant created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantResponse'
+              example:
+                id: 550e8400-e29b-41d4-a716-446655440000
+                name: my-workspace
+                workspace: myteam.slack.com
+                team_id: T01234567
+                active: true
+                created_at: "2026-02-18T12:00:00Z"
+                api_key: a1b2c3d4e5f6...
+        '400':
+          description: Invalid request or credential validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /tenants/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    get:
+      tags: [Tenants]
+      summary: Get tenant info
+      description: Returns tenant details. The caller must own this tenant or be an admin.
+      responses:
+        '200':
+          description: Tenant details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Tenants]
+      summary: Deactivate a tenant
+      description: |
+        Deactivates a tenant. The tenant's data is retained but they can no
+        longer authenticate or trigger exports.
+
+        **Requires admin authentication.**
+      responses:
+        '204':
+          description: Tenant deactivated
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tenants/{id}/keys:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    post:
+      tags: [API Keys]
+      summary: Create a new API key
+      description: |
+        Generates a new API key for the tenant. The raw key is returned only
+        once in the response — store it securely.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIKeyRequest'
+            example:
+              name: ci-pipeline
+      responses:
+        '201':
+          description: API key created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeyResponse'
+              example:
+                id: 660e8400-e29b-41d4-a716-446655440000
+                key_prefix: a1b2c3d4
+                name: ci-pipeline
+                created_at: "2026-02-18T12:00:00Z"
+                api_key: a1b2c3d4e5f6...
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /tenants/{id}/keys/{key_id}:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+      - name: key_id
+        in: path
+        required: true
+        description: API key ID
+        schema:
+          type: string
+          format: uuid
+    delete:
+      tags: [API Keys]
+      summary: Revoke an API key
+      description: Permanently revokes an API key. It can no longer be used for authentication.
+      responses:
+        '204':
+          description: API key revoked
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tenants/{id}/exports:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    post:
+      tags: [Exports]
+      summary: Trigger a new export
+      description: |
+        Submits a new export job. The export runs asynchronously in the
+        background. Optionally filter to specific channels.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExportRequest'
+            examples:
+              full_export:
+                summary: Full workspace export
+                value: {}
+              filtered:
+                summary: Export specific channels
+                value:
+                  channels:
+                    - C01234567
+                    - C76543210
+      responses:
+        '201':
+          description: Export job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportResponse'
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    get:
+      tags: [Exports]
+      summary: List exports
+      description: Returns all export jobs for the tenant, ordered by creation time (newest first).
+      responses:
+        '200':
+          description: List of exports
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ExportResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /tenants/{id}/exports/{job_id}:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+      - $ref: '#/components/parameters/JobID'
+    get:
+      tags: [Exports]
+      summary: Get export status
+      description: Returns the current status of an export job.
+      responses:
+        '200':
+          description: Export details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tenants/{id}/exports/{job_id}/download:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+      - $ref: '#/components/parameters/JobID'
+    get:
+      tags: [Downloads]
+      summary: Download completed export
+      description: |
+        Downloads the export archive as a SQLite database file. The export
+        must have status `completed`. Returns 404 if the export is still
+        running or has failed.
+      responses:
+        '200':
+          description: Export file
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+              example: attachment; filename=slackdump.sqlite
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Export not found, not completed, or file missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Admin key or tenant API key
+
+  parameters:
+    TenantID:
+      name: id
+      in: path
+      required: true
+      description: Tenant ID
+      schema:
+        type: string
+        format: uuid
+    JobID:
+      name: job_id
+      in: path
+      required: true
+      description: Export job ID
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid authentication
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: missing or invalid authorization header
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: admin access required
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: not found
+
+  schemas:
+    TenantRequest:
+      type: object
+      required:
+        - name
+      description: |
+        Provide credentials in one of two modes:
+
+        **Token + cookie mode:** Supply `slack_token` (and `slack_cookie` if using a client token `xoxc-`).
+
+        **Cookie-only mode:** Supply `slack_cookie` and `workspace` (the Slack subdomain, e.g. `myteam` for `myteam.slack.com`). The server derives the token automatically.
+      properties:
+        name:
+          type: string
+          description: Display name for the tenant
+          example: my-workspace
+        workspace:
+          type: string
+          description: Slack workspace subdomain (e.g. `myteam` for `myteam.slack.com`). Used in cookie-only auth. Defaults to `kobe-ai` if not provided.
+          default: kobe-ai
+          example: kobe-ai
+        slack_token:
+          type: string
+          description: Slack token (`xoxc-...` for client tokens, `xoxb-...` for bot tokens). Optional if `slack_cookie` and `workspace` are provided.
+          example: xoxc-...
+        slack_cookie:
+          type: string
+          description: Slack `d` cookie value (`xoxd-...`). Required for client tokens (`xoxc-`), or used alone with `workspace` for cookie-only auth.
+          example: xoxd-...
+
+    TenantResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        name:
+          type: string
+          description: Display name
+        workspace:
+          type: string
+          description: Slack workspace name (from auth test)
+        team_id:
+          type: string
+          description: Slack team ID
+        active:
+          type: boolean
+          description: Whether the tenant is active
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp
+        api_key:
+          type: string
+          description: Initial API key (only returned on tenant creation)
+
+    APIKeyRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Display name for the API key
+          example: ci-pipeline
+
+    APIKeyResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: API key ID
+        key_prefix:
+          type: string
+          description: First 8 characters of the key (for identification)
+          example: a1b2c3d4
+        name:
+          type: string
+          description: Display name
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Expiration timestamp (null if no expiry)
+        api_key:
+          type: string
+          description: Raw API key (only returned on creation)
+
+    ExportRequest:
+      type: object
+      properties:
+        channels:
+          type: array
+          items:
+            type: string
+          description: Optional list of Slack channel IDs to export. If empty, exports all channels.
+          example:
+            - C01234567
+
+    ExportResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Export job ID
+        tenant_id:
+          type: string
+          format: uuid
+          description: Tenant ID
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - completed
+            - failed
+          description: Job status
+        channels:
+          type: string
+          description: Comma-separated channel IDs (empty for full export)
+        triggered_by:
+          type: string
+          enum:
+            - api
+            - scheduler
+            - tenant-create
+          description: What triggered the export
+        error_msg:
+          type: string
+          description: Error message (only set when status is failed)
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the export started running
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the export completed or failed
+        created_at:
+          type: string
+          format: date-time
+          description: When the job was created
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+      required:
+        - error
