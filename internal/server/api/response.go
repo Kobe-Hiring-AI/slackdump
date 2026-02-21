@@ -9,10 +9,11 @@ import (
 
 // TenantRequest is the body of POST /tenants.
 type TenantRequest struct {
-	Name        string `json:"name"`
-	Workspace   string `json:"workspace,omitempty"`
-	SlackToken  string `json:"slack_token,omitempty"`
-	SlackCookie string `json:"slack_cookie,omitempty"`
+	Name          string `json:"name"`
+	Workspace     string `json:"workspace,omitempty"`
+	SlackToken    string `json:"slack_token,omitempty"`
+	SlackCookie   string `json:"slack_cookie,omitempty"`
+	SlackBotToken string `json:"slack_bot_token,omitempty"`
 }
 
 // TenantResponse is returned from tenant endpoints.

@@ -21,11 +21,12 @@ func (s *credentialStore) Upsert(ctx context.Context, c *Credential) error {
 	now := time.Now().UTC()
 	c.UpdatedAt = now
 
-	const q = `INSERT INTO CREDENTIAL (ID, TENANT_ID, TOKEN_ENC, COOKIE_ENC, CREATED_AT, UPDATED_AT)
-		VALUES (:ID, :TENANT_ID, :TOKEN_ENC, :COOKIE_ENC, :CREATED_AT, :UPDATED_AT)
+	const q = `INSERT INTO CREDENTIAL (ID, TENANT_ID, TOKEN_ENC, COOKIE_ENC, BOT_TOKEN_ENC, CREATED_AT, UPDATED_AT)
+		VALUES (:ID, :TENANT_ID, :TOKEN_ENC, :COOKIE_ENC, :BOT_TOKEN_ENC, :CREATED_AT, :UPDATED_AT)
 		ON CONFLICT(TENANT_ID) DO UPDATE SET
 			TOKEN_ENC = excluded.TOKEN_ENC,
 			COOKIE_ENC = excluded.COOKIE_ENC,
+			BOT_TOKEN_ENC = excluded.BOT_TOKEN_ENC,
 			UPDATED_AT = excluded.UPDATED_AT`
 	if _, err := s.db.NamedExecContext(ctx, q, c); err != nil {
 		return fmt.Errorf("credential: upsert: %w", err)
@@ -35,7 +36,7 @@ func (s *credentialStore) Upsert(ctx context.Context, c *Credential) error {
 
 func (s *credentialStore) GetByTenant(ctx context.Context, tenantID string) (*Credential, error) {
 	var c Credential
-	const q = `SELECT ID, TENANT_ID, TOKEN_ENC, COOKIE_ENC, CREATED_AT, UPDATED_AT
+	const q = `SELECT ID, TENANT_ID, TOKEN_ENC, COOKIE_ENC, BOT_TOKEN_ENC, CREATED_AT, UPDATED_AT
 		FROM CREDENTIAL WHERE TENANT_ID = ?`
 	if err := s.db.GetContext(ctx, &c, q, tenantID); err != nil {
 		if err == sql.ErrNoRows {

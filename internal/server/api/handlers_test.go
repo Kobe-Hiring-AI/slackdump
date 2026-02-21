@@ -95,6 +95,58 @@ func TestTenantHandler_Create(t *testing.T) {
 	assert.Equal(t, "tenant-create", engine.submitted[0].TriggeredBy)
 }
 
+func TestTenantHandler_Create_WithBotToken(t *testing.T) {
+	s := testStore(t)
+	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}
+	engine := &mockEngine{}
+	key := encKey()
+	h := NewTenantHandler(s, key, validator, engine)
+
+	body := `{"name":"Bot Workspace","slack_token":"xoxp-user","slack_bot_token":"xoxb-bot-token"}`
+	req := httptest.NewRequest(http.MethodPost, "/tenants", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp TenantResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+
+	// Verify bot token was encrypted and stored.
+	cred, err := s.Credentials.GetByTenant(context.Background(), resp.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, cred.BotTokenEnc, "bot token should be stored")
+
+	// Decrypt and verify.
+	botToken, err := store.Decrypt(key, cred.BotTokenEnc)
+	require.NoError(t, err)
+	assert.Equal(t, "xoxb-bot-token", string(botToken))
+}
+
+func TestTenantHandler_Create_WithoutBotToken(t *testing.T) {
+	s := testStore(t)
+	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}
+	engine := &mockEngine{}
+	h := NewTenantHandler(s, encKey(), validator, engine)
+
+	body := `{"name":"No Bot","slack_token":"xoxp-user"}`
+	req := httptest.NewRequest(http.MethodPost, "/tenants", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+
+	h.Create(rec, req)
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	var resp TenantResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+
+	// Verify bot token is nil when not provided.
+	cred, err := s.Credentials.GetByTenant(context.Background(), resp.ID)
+	require.NoError(t, err)
+	assert.Nil(t, cred.BotTokenEnc, "bot token should be nil when not provided")
+}
+
 func TestTenantHandler_Create_MissingFields(t *testing.T) {
 	s := testStore(t)
 	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}

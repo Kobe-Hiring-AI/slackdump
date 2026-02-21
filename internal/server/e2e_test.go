@@ -236,6 +236,51 @@ func TestE2E_FullWorkflow(t *testing.T) {
 	resp.Body.Close()
 }
 
+// TestE2E_BotTokenStorage tests that creating a tenant with a bot token stores it
+// and the credential can be retrieved with the bot token intact.
+func TestE2E_BotTokenStorage(t *testing.T) {
+	env := newE2EEnv(t)
+
+	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		Name:          "bot-test",
+		SlackToken:    "xoxp-user-token",
+		SlackBotToken: "xoxb-bot-token",
+	})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	tenant := decodeJSON[api.TenantResponse](t, resp)
+
+	// Verify the credential was stored with bot token.
+	cred, err := env.store.Credentials.GetByTenant(context.Background(), tenant.ID)
+	require.NoError(t, err)
+	require.NotNil(t, cred.BotTokenEnc, "bot token should be stored")
+
+	// Decrypt and verify the bot token.
+	botToken, err := store.Decrypt(encKey(), cred.BotTokenEnc)
+	require.NoError(t, err)
+	assert.Equal(t, "xoxb-bot-token", string(botToken))
+
+	// Also verify the user token.
+	userToken, err := store.Decrypt(encKey(), cred.TokenEnc)
+	require.NoError(t, err)
+	assert.Equal(t, "xoxp-user-token", string(userToken))
+}
+
+// TestE2E_NoBotToken tests that creating a tenant without a bot token leaves it nil.
+func TestE2E_NoBotToken(t *testing.T) {
+	env := newE2EEnv(t)
+
+	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		Name:       "no-bot",
+		SlackToken: "xoxp-user-only",
+	})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	tenant := decodeJSON[api.TenantResponse](t, resp)
+
+	cred, err := env.store.Credentials.GetByTenant(context.Background(), tenant.ID)
+	require.NoError(t, err)
+	assert.Nil(t, cred.BotTokenEnc, "bot token should be nil when not provided")
+}
+
 // TestE2E_CookieOnlyTenantCreation tests creating a tenant with cookie-only auth.
 func TestE2E_CookieOnlyTenantCreation(t *testing.T) {
 	env := newE2EEnv(t)

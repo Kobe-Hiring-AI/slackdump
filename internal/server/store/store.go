@@ -41,12 +41,13 @@ type APIKey struct {
 
 // Credential holds encrypted Slack credentials for a tenant.
 type Credential struct {
-	ID        string    `db:"ID"         json:"id"`
-	TenantID  string    `db:"TENANT_ID"  json:"tenant_id"`
-	TokenEnc  []byte    `db:"TOKEN_ENC"  json:"-"`
-	CookieEnc []byte    `db:"COOKIE_ENC" json:"-"`
-	CreatedAt time.Time `db:"CREATED_AT" json:"created_at"`
-	UpdatedAt time.Time `db:"UPDATED_AT" json:"updated_at"`
+	ID          string    `db:"ID"            json:"id"`
+	TenantID    string    `db:"TENANT_ID"     json:"tenant_id"`
+	TokenEnc    []byte    `db:"TOKEN_ENC"     json:"-"`
+	CookieEnc   []byte    `db:"COOKIE_ENC"    json:"-"`
+	BotTokenEnc []byte    `db:"BOT_TOKEN_ENC" json:"-"`
+	CreatedAt   time.Time `db:"CREATED_AT"    json:"created_at"`
+	UpdatedAt   time.Time `db:"UPDATED_AT"    json:"updated_at"`
 }
 
 // ExportJob represents a running or completed export job.

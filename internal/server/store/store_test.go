@@ -316,6 +316,74 @@ func TestCredentialUpsertUpdate(t *testing.T) {
 	assert.Equal(t, []byte("new-cookie"), got.CookieEnc)
 }
 
+func TestCredentialBotTokenRoundTrip(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+	createTestTenant(t, s, "t1")
+
+	cred := &Credential{
+		ID:          "c1",
+		TenantID:    "t1",
+		TokenEnc:    []byte("encrypted-token"),
+		CookieEnc:   []byte("encrypted-cookie"),
+		BotTokenEnc: []byte("encrypted-bot-token"),
+		CreatedAt:   time.Now().UTC(),
+	}
+	require.NoError(t, s.Credentials.Upsert(ctx, cred))
+
+	got, err := s.Credentials.GetByTenant(ctx, "t1")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("encrypted-bot-token"), got.BotTokenEnc)
+}
+
+func TestCredentialBotTokenNullable(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+	createTestTenant(t, s, "t1")
+
+	// Store credential without bot token (nil).
+	cred := &Credential{
+		ID:        "c1",
+		TenantID:  "t1",
+		TokenEnc:  []byte("encrypted-token"),
+		CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, s.Credentials.Upsert(ctx, cred))
+
+	got, err := s.Credentials.GetByTenant(ctx, "t1")
+	require.NoError(t, err)
+	assert.Nil(t, got.BotTokenEnc)
+}
+
+func TestCredentialBotTokenUpsertUpdate(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+	createTestTenant(t, s, "t1")
+
+	// First insert without bot token.
+	cred := &Credential{
+		ID:        "c1",
+		TenantID:  "t1",
+		TokenEnc:  []byte("token"),
+		CreatedAt: time.Now().UTC(),
+	}
+	require.NoError(t, s.Credentials.Upsert(ctx, cred))
+
+	// Upsert again with bot token.
+	cred2 := &Credential{
+		ID:          "c2",
+		TenantID:    "t1",
+		TokenEnc:    []byte("token"),
+		BotTokenEnc: []byte("bot-token"),
+		CreatedAt:   time.Now().UTC(),
+	}
+	require.NoError(t, s.Credentials.Upsert(ctx, cred2))
+
+	got, err := s.Credentials.GetByTenant(ctx, "t1")
+	require.NoError(t, err)
+	assert.Equal(t, []byte("bot-token"), got.BotTokenEnc)
+}
+
 func TestCredentialGetNotFound(t *testing.T) {
 	s := setupTestStore(t)
 	ctx := context.Background()

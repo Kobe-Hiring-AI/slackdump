@@ -88,6 +88,9 @@ func (e *Engine) RunExport(ctx context.Context, job *store.ExportJob) error {
 		return fmt.Errorf("engine: set completed: %w", err)
 	}
 	lg.InfoContext(ctx, "export completed", "output", outputDir)
+
+	e.sendCompletionNotification(ctx, lg, job.TenantID)
+
 	return nil
 }
 
@@ -106,9 +109,12 @@ func (e *Engine) runPipeline(ctx context.Context, lg *slog.Logger, job *store.Ex
 	if err != nil {
 		return "", fmt.Errorf("decrypt token: %w", err)
 	}
-	cookie, err := store.Decrypt(e.encryptionKey, cred.CookieEnc)
-	if err != nil {
-		return "", fmt.Errorf("decrypt cookie: %w", err)
+	var cookie []byte
+	if len(cred.CookieEnc) > 0 {
+		cookie, err = store.Decrypt(e.encryptionKey, cred.CookieEnc)
+		if err != nil {
+			return "", fmt.Errorf("decrypt cookie: %w", err)
+		}
 	}
 
 	// 3. Create auth provider.

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -85,6 +86,9 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	tenantID := uuid.New().String()
 
+	fmt.Printf("[DEBUG] Create tenant: token=%q cookie=%q (cookie len=%d)\n", token, cookie, len(cookie))
+	fmt.Printf("[DEBUG] Create tenant: encryption key len=%d\n", len(h.encryptionKey))
+
 	// Encrypt credentials.
 	tokenEnc, err := store.Encrypt(h.encryptionKey, []byte(token))
 	if err != nil {
@@ -97,6 +101,15 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 		cookieEnc, err = store.Encrypt(h.encryptionKey, []byte(cookie))
 		if err != nil {
 			slog.Error("encrypt cookie", "error", err)
+			respondError(w, http.StatusInternalServerError, "failed to encrypt credentials")
+			return
+		}
+	}
+	var botTokenEnc []byte
+	if req.SlackBotToken != "" {
+		botTokenEnc, err = store.Encrypt(h.encryptionKey, []byte(req.SlackBotToken))
+		if err != nil {
+			slog.Error("encrypt bot token", "error", err)
 			respondError(w, http.StatusInternalServerError, "failed to encrypt credentials")
 			return
 		}
@@ -117,10 +130,11 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Store credential.
 	cred := &store.Credential{
-		ID:        uuid.New().String(),
-		TenantID:  tenantID,
-		TokenEnc:  tokenEnc,
-		CookieEnc: cookieEnc,
+		ID:          uuid.New().String(),
+		TenantID:    tenantID,
+		TokenEnc:    tokenEnc,
+		CookieEnc:   cookieEnc,
+		BotTokenEnc: botTokenEnc,
 	}
 	if err := h.store.Credentials.Upsert(r.Context(), cred); err != nil {
 		slog.Error("upsert credentials", "error", err)
