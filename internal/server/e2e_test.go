@@ -73,7 +73,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		AdminKey:      "admin-key",
 		EncryptionKey: encKey(),
 		DataDir:       dataDir,
-	}, s, engine, validator)
+	}, s, engine, validator, nil, nil, nil)
 
 	ts := httptest.NewServer(sv.srv.Handler)
 	t.Cleanup(ts.Close)
@@ -125,6 +125,7 @@ func TestE2E_FullWorkflow(t *testing.T) {
 
 	// 1. Create tenant (admin auth).
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:          "tenant-acme",
 		Name:        "acme-corp",
 		SlackToken:  "xoxc-fake-token",
 		SlackCookie: "xoxd-fake-cookie",
@@ -211,7 +212,7 @@ func TestE2E_FullWorkflow(t *testing.T) {
 	resp.Body.Close()
 
 	// 12. Create the export file on disk.
-	exportDir := filepath.Join(env.dataDir, "tenants", tenantID, "export")
+	exportDir := filepath.Join(env.dataDir, tenantID, "test-ws")
 	require.NoError(t, os.MkdirAll(exportDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(exportDir, "slackdump.sqlite"), []byte("sqlite-data"), 0o644))
 
@@ -242,6 +243,7 @@ func TestE2E_BotTokenStorage(t *testing.T) {
 	env := newE2EEnv(t)
 
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:            "tenant-bot",
 		Name:          "bot-test",
 		SlackToken:    "xoxp-user-token",
 		SlackBotToken: "xoxb-bot-token",
@@ -270,6 +272,7 @@ func TestE2E_NoBotToken(t *testing.T) {
 	env := newE2EEnv(t)
 
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-nobot",
 		Name:       "no-bot",
 		SlackToken: "xoxp-user-only",
 	})
@@ -286,6 +289,7 @@ func TestE2E_CookieOnlyTenantCreation(t *testing.T) {
 	env := newE2EEnv(t)
 
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:          "tenant-cookie",
 		Name:        "cookie-ws",
 		Workspace:   "my-team",
 		SlackCookie: "xoxd-cookie-value",
@@ -303,6 +307,7 @@ func TestE2E_CookieOnlyDefaultWorkspace(t *testing.T) {
 	env := newE2EEnv(t)
 
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:          "tenant-cookie-default",
 		Name:        "cookie-ws",
 		SlackCookie: "xoxd-cookie-value",
 		// No workspace — should default to kobe-ai.
@@ -355,6 +360,7 @@ func TestE2E_AdminOnly(t *testing.T) {
 
 	// Create a tenant to get a tenant API key.
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-admin-test",
 		Name:       "test",
 		SlackToken: "xoxc-test",
 	})
@@ -364,6 +370,7 @@ func TestE2E_AdminOnly(t *testing.T) {
 
 	// Tenant key should not be able to create tenants.
 	resp = env.doRequest(t, "POST", "/tenants", tenantKey, api.TenantRequest{
+		ID:         "tenant-hacker",
 		Name:       "hacker-ws",
 		SlackToken: "xoxc-stolen",
 	})
@@ -382,6 +389,7 @@ func TestE2E_TenantIsolation(t *testing.T) {
 
 	// Create two tenants.
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-a",
 		Name:       "tenant-a",
 		SlackToken: "xoxc-a",
 	})
@@ -389,6 +397,7 @@ func TestE2E_TenantIsolation(t *testing.T) {
 	tenantA := decodeJSON[api.TenantResponse](t, resp)
 
 	resp = env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-b",
 		Name:       "tenant-b",
 		SlackToken: "xoxc-b",
 	})
@@ -467,14 +476,20 @@ func TestE2E_CreateTenantValidation(t *testing.T) {
 		wantSubstr string
 	}{
 		{
+			name:       "missing id",
+			body:       api.TenantRequest{Name: "test", SlackToken: "xoxc-test"},
+			wantCode:   http.StatusBadRequest,
+			wantSubstr: "id is required",
+		},
+		{
 			name:       "missing name",
-			body:       api.TenantRequest{SlackToken: "xoxc-test"},
+			body:       api.TenantRequest{ID: "tenant-val1", SlackToken: "xoxc-test"},
 			wantCode:   http.StatusBadRequest,
 			wantSubstr: "name is required",
 		},
 		{
 			name:       "missing credentials",
-			body:       api.TenantRequest{Name: "test"},
+			body:       api.TenantRequest{ID: "tenant-val2", Name: "test"},
 			wantCode:   http.StatusBadRequest,
 			wantSubstr: "slack_token or slack_cookie is required",
 		},
@@ -496,6 +511,7 @@ func TestE2E_ExportFullExport(t *testing.T) {
 
 	// Create tenant.
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-fullexport",
 		Name:       "full-export",
 		SlackToken: "xoxc-test",
 	})
@@ -515,6 +531,7 @@ func TestE2E_NotFound(t *testing.T) {
 
 	// Create a tenant to get valid auth.
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-notfound",
 		Name:       "test",
 		SlackToken: "xoxc-test",
 	})
@@ -552,6 +569,7 @@ func TestE2E_MultipleExports(t *testing.T) {
 	env := newE2EEnv(t)
 
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-multiexport",
 		Name:       "multi-export",
 		SlackToken: "xoxc-test",
 	})
@@ -580,6 +598,7 @@ func TestE2E_DownloadWrongTenant(t *testing.T) {
 
 	// Create two tenants.
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-owner",
 		Name:       "owner",
 		SlackToken: "xoxc-owner",
 	})
@@ -587,6 +606,7 @@ func TestE2E_DownloadWrongTenant(t *testing.T) {
 	owner := decodeJSON[api.TenantResponse](t, resp)
 
 	resp = env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-attacker",
 		Name:       "attacker",
 		SlackToken: "xoxc-attacker",
 	})

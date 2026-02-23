@@ -9,6 +9,9 @@ import (
 
 // TenantRequest is the body of POST /tenants.
 type TenantRequest struct {
+	// UserID is the caller's Supabase auth_id, used as the tenant ID.
+	UserID        string `json:"user_id"`
+	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Workspace     string `json:"workspace,omitempty"`
 	SlackToken    string `json:"slack_token,omitempty"`
