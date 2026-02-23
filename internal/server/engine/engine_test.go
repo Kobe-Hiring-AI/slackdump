@@ -62,7 +62,7 @@ func TestResumeJobs(t *testing.T) {
 		Jobs:        mock,
 		Credentials: &mockCredStore{},
 	}
-	eng := New(st, nil, t.TempDir(), 4)
+	eng := New(st, nil, t.TempDir(), 4, nil)
 
 	if err := eng.ResumeJobs(context.Background()); err != nil {
 		t.Fatalf("ResumeJobs: %v", err)
@@ -82,7 +82,7 @@ func TestResumeJobs(t *testing.T) {
 func TestResumeJobs_StoreError(t *testing.T) {
 	mock := &mockJobStore{resumeErr: errors.New("db down")}
 	st := &store.Store{Jobs: mock}
-	eng := New(st, nil, t.TempDir(), 4)
+	eng := New(st, nil, t.TempDir(), 4, nil)
 
 	err := eng.ResumeJobs(context.Background())
 	if err == nil {
@@ -93,7 +93,7 @@ func TestResumeJobs_StoreError(t *testing.T) {
 func TestResumeJobs_NoJobs(t *testing.T) {
 	mock := &mockJobStore{}
 	st := &store.Store{Jobs: mock}
-	eng := New(st, nil, t.TempDir(), 4)
+	eng := New(st, nil, t.TempDir(), 4, nil)
 
 	if err := eng.ResumeJobs(context.Background()); err != nil {
 		t.Fatalf("ResumeJobs with no jobs: %v", err)

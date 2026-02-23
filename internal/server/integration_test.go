@@ -49,14 +49,14 @@ func TestIntegration_ExportJobStarts(t *testing.T) {
 	dataDir := filepath.Join(dir, "data")
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
 
-	eng := engine.New(s, encryptionKey, dataDir, 1)
+	eng := engine.New(s, encryptionKey, dataDir, 1, nil)
 
 	sv := newServer(Config{
 		Addr:          ":0",
 		AdminKey:      "admin-key",
 		EncryptionKey: encryptionKey,
 		DataDir:       dataDir,
-	}, s, eng, &slackValidator{})
+	}, s, eng, &slackValidator{}, nil, nil, nil)
 
 	ts := httptest.NewServer(sv.srv.Handler)
 	t.Cleanup(ts.Close)
@@ -65,6 +65,7 @@ func TestIntegration_ExportJobStarts(t *testing.T) {
 
 	// 1. Create tenant with cookie-only auth (validates against real Slack).
 	tenant := jsonRequest[api.TenantResponse](t, ts, "POST", "/tenants", adminKey, api.TenantRequest{
+		ID:          "tenant-integration",
 		Name:        "integration-test",
 		Workspace:   workspace,
 		SlackCookie: cookie,

@@ -71,9 +71,9 @@ func TestTenantHandler_Create(t *testing.T) {
 	s := testStore(t)
 	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}
 	engine := &mockEngine{}
-	h := NewTenantHandler(s, encKey(), validator, engine)
+	h := NewTenantHandler(s, encKey(), validator, engine, nil)
 
-	body := `{"name":"My Workspace","slack_token":"xoxc-test-token","slack_cookie":"xoxd-test-cookie"}`
+	body := `{"id":"t-create","name":"My Workspace","slack_token":"xoxc-test-token","slack_cookie":"xoxd-test-cookie"}`
 	req := httptest.NewRequest(http.MethodPost, "/tenants", bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 
@@ -100,9 +100,9 @@ func TestTenantHandler_Create_WithBotToken(t *testing.T) {
 	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}
 	engine := &mockEngine{}
 	key := encKey()
-	h := NewTenantHandler(s, key, validator, engine)
+	h := NewTenantHandler(s, key, validator, engine, nil)
 
-	body := `{"name":"Bot Workspace","slack_token":"xoxp-user","slack_bot_token":"xoxb-bot-token"}`
+	body := `{"id":"t-bot","name":"Bot Workspace","slack_token":"xoxp-user","slack_bot_token":"xoxb-bot-token"}`
 	req := httptest.NewRequest(http.MethodPost, "/tenants", bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 
@@ -128,9 +128,9 @@ func TestTenantHandler_Create_WithoutBotToken(t *testing.T) {
 	s := testStore(t)
 	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}
 	engine := &mockEngine{}
-	h := NewTenantHandler(s, encKey(), validator, engine)
+	h := NewTenantHandler(s, encKey(), validator, engine, nil)
 
-	body := `{"name":"No Bot","slack_token":"xoxp-user"}`
+	body := `{"id":"t-nobot","name":"No Bot","slack_token":"xoxp-user"}`
 	req := httptest.NewRequest(http.MethodPost, "/tenants", bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 
@@ -150,7 +150,7 @@ func TestTenantHandler_Create_WithoutBotToken(t *testing.T) {
 func TestTenantHandler_Create_MissingFields(t *testing.T) {
 	s := testStore(t)
 	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}
-	h := NewTenantHandler(s, encKey(), validator, nil)
+	h := NewTenantHandler(s, encKey(), validator, nil, nil)
 
 	body := `{}`
 	req := httptest.NewRequest(http.MethodPost, "/tenants", bytes.NewBufferString(body))
@@ -163,7 +163,7 @@ func TestTenantHandler_Create_MissingFields(t *testing.T) {
 
 func TestTenantHandler_Get(t *testing.T) {
 	s := testStore(t)
-	h := NewTenantHandler(s, encKey(), nil, nil)
+	h := NewTenantHandler(s, encKey(), nil, nil, nil)
 
 	// Create a tenant.
 	tenant := &store.Tenant{ID: "t-1", Name: "Test", Workspace: "ws", TeamID: "T1"}
@@ -186,7 +186,7 @@ func TestTenantHandler_Get(t *testing.T) {
 
 func TestTenantHandler_Get_NotFound(t *testing.T) {
 	s := testStore(t)
-	h := NewTenantHandler(s, encKey(), nil, nil)
+	h := NewTenantHandler(s, encKey(), nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/tenants/nonexistent", nil)
 	req = withChiParams(req, map[string]string{"id": "nonexistent"})
@@ -199,7 +199,7 @@ func TestTenantHandler_Get_NotFound(t *testing.T) {
 
 func TestTenantHandler_Delete(t *testing.T) {
 	s := testStore(t)
-	h := NewTenantHandler(s, encKey(), nil, nil)
+	h := NewTenantHandler(s, encKey(), nil, nil, nil)
 
 	tenant := &store.Tenant{ID: "t-1", Name: "Test", Workspace: "ws", TeamID: "T1"}
 	require.NoError(t, s.Tenants.Create(context.Background(), tenant))
@@ -219,7 +219,7 @@ func TestTenantHandler_Delete(t *testing.T) {
 
 func TestTenantHandler_Delete_NotFound(t *testing.T) {
 	s := testStore(t)
-	h := NewTenantHandler(s, encKey(), nil, nil)
+	h := NewTenantHandler(s, encKey(), nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/tenants/nonexistent", nil)
 	req = withChiParams(req, map[string]string{"id": "nonexistent"})
@@ -431,10 +431,16 @@ func TestExportHandler_Get_WrongTenant(t *testing.T) {
 
 func TestDownloadHandler_Download(t *testing.T) {
 	dataDir := t.TempDir()
-	h := NewDownloadHandler(dataDir)
+	s := testStore(t)
+	h := NewDownloadHandler(dataDir, s, nil)
 
-	// Create the file.
-	exportDir := filepath.Join(dataDir, "tenants", "t-1", "export")
+	// Create tenant so the handler can look up workspace.
+	require.NoError(t, s.Tenants.Create(context.Background(), &store.Tenant{
+		ID: "t-1", Name: "test", Workspace: "test-ws", TeamID: "T1",
+	}))
+
+	// Create the file at the new path: {dataDir}/{tenantID}/{workspace}/slackdump.sqlite
+	exportDir := filepath.Join(dataDir, "t-1", "test-ws")
 	require.NoError(t, os.MkdirAll(exportDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(exportDir, "slackdump.sqlite"), []byte("test-data"), 0o644))
 
@@ -449,7 +455,13 @@ func TestDownloadHandler_Download(t *testing.T) {
 }
 
 func TestDownloadHandler_Download_FileNotFound(t *testing.T) {
-	h := NewDownloadHandler(t.TempDir())
+	s := testStore(t)
+	h := NewDownloadHandler(t.TempDir(), s, nil)
+
+	// Create tenant so the handler can look up workspace.
+	require.NoError(t, s.Tenants.Create(context.Background(), &store.Tenant{
+		ID: "t-1", Name: "test", Workspace: "test-ws", TeamID: "T1",
+	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/tenants/t-1/export/download", nil)
 	req = withChiParams(req, map[string]string{"id": "t-1"})

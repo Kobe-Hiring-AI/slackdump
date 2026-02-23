@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/rusq/slackdump/v4/internal/server/engine"
 	"github.com/rusq/slackdump/v4/internal/server/store"
 )
 
@@ -28,15 +29,17 @@ type TenantHandler struct {
 	encryptionKey []byte
 	validator     CredentialValidator
 	engine        ExportEngine
+	sqldClient    *engine.SqldClient
 }
 
 // NewTenantHandler creates a new TenantHandler.
-func NewTenantHandler(s *store.Store, encKey []byte, v CredentialValidator, engine ExportEngine) *TenantHandler {
+func NewTenantHandler(s *store.Store, encKey []byte, v CredentialValidator, eng ExportEngine, sqld *engine.SqldClient) *TenantHandler {
 	return &TenantHandler{
 		store:         s,
 		encryptionKey: encKey,
 		validator:     v,
-		engine:        engine,
+		engine:        eng,
+		sqldClient:    sqld,
 	}
 }
 
@@ -45,6 +48,14 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req TenantRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Prefer user_id (Supabase auth_id); fall back to legacy id field.
+	if req.UserID == "" {
+		req.UserID = req.ID
+	}
+	if req.UserID == "" {
+		respondError(w, http.StatusBadRequest, "user_id is required")
 		return
 	}
 	if req.Name == "" {
@@ -84,7 +95,7 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tenantID := uuid.New().String()
+	tenantID := req.UserID
 
 	fmt.Printf("[DEBUG] Create tenant: token=%q cookie=%q (cookie len=%d)\n", token, cookie, len(cookie))
 	fmt.Printf("[DEBUG] Create tenant: encryption key len=%d\n", len(h.encryptionKey))
@@ -140,6 +151,20 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 		slog.Error("upsert credentials", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to store credentials")
 		return
+	}
+
+	// Create sqld namespace for the tenant.
+	if h.sqldClient != nil {
+		ns := "user-" + tenantID
+		if err := h.sqldClient.CreateNamespace(r.Context(), ns); err != nil {
+			slog.Error("create sqld namespace", "error", err, "namespace", ns)
+			// Rollback: deactivate the tenant we just created.
+			if rbErr := h.store.Tenants.Deactivate(r.Context(), tenantID); rbErr != nil {
+				slog.Error("rollback tenant deactivation failed", "error", rbErr)
+			}
+			respondError(w, http.StatusInternalServerError, "failed to create database namespace")
+			return
+		}
 	}
 
 	// Create initial API key.
@@ -231,6 +256,14 @@ func (h *TenantHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		slog.Error("deactivate tenant", "error", err)
 		respondError(w, http.StatusInternalServerError, "failed to deactivate tenant")
 		return
+	}
+
+	// Delete sqld namespace (non-fatal).
+	if h.sqldClient != nil {
+		ns := "user-" + id
+		if err := h.sqldClient.DeleteNamespace(r.Context(), ns); err != nil {
+			slog.Error("delete sqld namespace", "error", err, "namespace", ns)
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)

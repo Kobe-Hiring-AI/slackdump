@@ -17,7 +17,10 @@ import (
 	"github.com/rusq/slackdump/v4/internal/chunk/backend/dbase/repository"
 	"github.com/rusq/slackdump/v4/internal/chunk/control"
 	"github.com/rusq/slackdump/v4/internal/client"
+	"github.com/rusq/slackdump/v4/internal/fasttime"
 	"github.com/rusq/slackdump/v4/internal/network"
+	serverauth "github.com/rusq/slackdump/v4/internal/server/auth"
+	"github.com/rusq/slackdump/v4/internal/server/storage"
 	"github.com/rusq/slackdump/v4/internal/server/store"
 	"github.com/rusq/slackdump/v4/internal/structures"
 	"github.com/rusq/slackdump/v4/stream"
@@ -29,17 +32,37 @@ type Engine struct {
 	encryptionKey []byte
 	dataDir       string
 	pool          *WorkerPool
+	storage       storage.Storage        // file storage backend (filesystem or S3)
+	sqldURL       string                 // public sqld URL (empty = local SQLite mode)
+	tokenIssuer   *serverauth.TokenIssuer // for minting internal JWTs
 }
 
 // New creates a new Engine. maxConcurrent controls how many export jobs can
-// run simultaneously.
-func New(s *store.Store, encryptionKey []byte, dataDir string, maxConcurrent int) *Engine {
+// run simultaneously. If st is nil, a FilesystemStorage is used.
+func New(s *store.Store, encryptionKey []byte, dataDir string, maxConcurrent int, st storage.Storage) *Engine {
+	if st == nil {
+		st = storage.NewFilesystemStorage(dataDir)
+	}
 	return &Engine{
 		store:         s,
 		encryptionKey: encryptionKey,
 		dataDir:       dataDir,
 		pool:          NewWorkerPool(maxConcurrent),
+		storage:       st,
 	}
+}
+
+// SetSqld configures the engine to write to sqld namespaces instead of local
+// SQLite files. If sqldURL is empty or issuer is nil, the engine falls back to
+// local file mode.
+func (e *Engine) SetSqld(sqldURL string, issuer *serverauth.TokenIssuer) {
+	e.sqldURL = sqldURL
+	e.tokenIssuer = issuer
+}
+
+// useSqld returns true if the engine is configured for remote sqld writes.
+func (e *Engine) useSqld() bool {
+	return e.sqldURL != "" && e.tokenIssuer != nil
 }
 
 // ResumeJobs finds any jobs left in pending or running state from a previous
@@ -84,6 +107,18 @@ func (e *Engine) RunExport(ctx context.Context, job *store.ExportJob) error {
 		return err
 	}
 
+	// Upload to storage after export completes.
+	if e.storage != nil {
+		tenant, tErr := e.store.Tenants.Get(ctx, job.TenantID)
+		if tErr == nil {
+			localPath := filepath.Join(outputDir, "slackdump.sqlite")
+			s3Key := filepath.Join(job.TenantID, tenant.Workspace, "slackdump.sqlite")
+			if uErr := e.storage.Upload(ctx, s3Key, localPath); uErr != nil {
+				lg.ErrorContext(ctx, "storage upload failed (non-fatal)", "error", uErr)
+			}
+		}
+	}
+
 	if err := e.store.Jobs.SetCompleted(ctx, job.ID, outputDir); err != nil {
 		return fmt.Errorf("engine: set completed: %w", err)
 	}
@@ -102,6 +137,12 @@ func (e *Engine) runPipeline(ctx context.Context, lg *slog.Logger, job *store.Ex
 	cred, err := e.store.Credentials.GetByTenant(ctx, job.TenantID)
 	if err != nil {
 		return "", fmt.Errorf("get credentials: %w", err)
+	}
+
+	// Look up tenant to get workspace name.
+	tenant, err := e.store.Tenants.Get(ctx, job.TenantID)
+	if err != nil {
+		return "", fmt.Errorf("get tenant: %w", err)
 	}
 
 	// 2. Decrypt token and cookie.
@@ -129,14 +170,14 @@ func (e *Engine) runPipeline(ctx context.Context, lg *slog.Logger, job *store.Ex
 		return "", fmt.Errorf("create client: %w", err)
 	}
 
-	// 5. Prepare per-tenant output directory.
-	outputDir := filepath.Join(e.dataDir, "tenants", job.TenantID, "export")
+	// 5. Prepare output directory: {dataDir}/{tenantID}/{workspace}
+	outputDir := filepath.Join(e.dataDir, job.TenantID, tenant.Workspace)
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return "", fmt.Errorf("create output dir: %w", err)
 	}
 
 	// 6. Set up per-job log file.
-	logDir := filepath.Join(outputDir, "logs")
+	logDir := filepath.Join(e.dataDir, job.TenantID, tenant.Workspace, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return "", fmt.Errorf("create log dir: %w", err)
 	}
@@ -153,22 +194,55 @@ func (e *Engine) runPipeline(ctx context.Context, lg *slog.Logger, job *store.Ex
 		),
 	).With("job_id", job.ID, "tenant_id", job.TenantID)
 
-	// 7. Resume from existing archive if present.
-	dbFile := filepath.Join(outputDir, "slackdump.sqlite")
+	// 7. Open database connection (remote sqld or local SQLite).
+	var conn *sqlx.DB
 	var list *structures.EntityList
-	if _, statErr := os.Stat(dbFile); statErr == nil {
-		lg.InfoContext(ctx, "existing archive found, building resume list")
-		src, openErr := dbase.Open(ctx, dbFile)
-		if openErr != nil {
-			return "", fmt.Errorf("open existing archive: %w", openErr)
+
+	if e.useSqld() {
+		lg.InfoContext(ctx, "using sqld remote database", "tenant_id", job.TenantID)
+
+		// Mint an internal JWT for this tenant's namespace.
+		jwtToken, tokenErr := e.tokenIssuer.IssueInternal(job.TenantID)
+		if tokenErr != nil {
+			return "", fmt.Errorf("issue internal token: %w", tokenErr)
 		}
-		latestMap, latestErr := src.Latest(ctx)
-		src.Close()
-		if latestErr != nil {
-			return "", fmt.Errorf("read latest timestamps: %w", latestErr)
+		conn, err = openUserDB(e.sqldURL, jwtToken)
+		if err != nil {
+			return "", fmt.Errorf("open sqld namespace: %w", err)
 		}
-		list = buildResumeList(latestMap, 7*24*time.Hour)
-		lg.InfoContext(ctx, "resume list built", "channels", list.IncludeCount())
+		defer conn.Close()
+
+		// Try to build resume list from remote database.
+		// This may fail on first run when tables don't exist yet.
+		list = tryBuildResumeList(ctx, lg, conn)
+		if list != nil {
+			lg.InfoContext(ctx, "resume list built from sqld", "channels", list.IncludeCount())
+		}
+	} else {
+		// Local SQLite mode.
+		dbFile := filepath.Join(outputDir, "slackdump.sqlite")
+
+		// Build resume list from existing local archive if present.
+		if _, statErr := os.Stat(dbFile); statErr == nil {
+			lg.InfoContext(ctx, "existing archive found, building resume list")
+			src, openErr := dbase.Open(ctx, dbFile)
+			if openErr != nil {
+				return "", fmt.Errorf("open existing archive: %w", openErr)
+			}
+			latestMap, latestErr := src.Latest(ctx)
+			src.Close()
+			if latestErr != nil {
+				return "", fmt.Errorf("read latest timestamps: %w", latestErr)
+			}
+			list = buildResumeList(latestMap, 7*24*time.Hour)
+			lg.InfoContext(ctx, "resume list built", "channels", list.IncludeCount())
+		}
+
+		conn, err = sqlx.Open(repository.Driver, dbFile)
+		if err != nil {
+			return "", fmt.Errorf("open export db: %w", err)
+		}
+		defer conn.Close()
 	}
 
 	// 8. Parse channel filter and merge with resume list.
@@ -178,9 +252,6 @@ func (e *Engine) runPipeline(ctx context.Context, lg *slog.Logger, job *store.Ex
 			return "", fmt.Errorf("parse channels: %w", parseErr)
 		}
 		if list != nil && filterList != nil {
-			// Merge: channels from the filter that are NOT in the resume
-			// list get added without an Oldest (full fetch for new channels).
-			// Channels already in the resume list keep their timestamps.
 			for id, item := range filterList.Index() {
 				if _, exists := list.Get(id); !exists {
 					list.Index()[id] = item
@@ -191,14 +262,7 @@ func (e *Engine) runPipeline(ctx context.Context, lg *slog.Logger, job *store.Ex
 		}
 	}
 
-	// 9. Open SQLite for export data.
-	conn, err := sqlx.Open(repository.Driver, dbFile)
-	if err != nil {
-		return "", fmt.Errorf("open export db: %w", err)
-	}
-	defer conn.Close()
-
-	// 10. Create dbase processor.
+	// 9. Create dbase processor.
 	dbp, err := dbase.New(ctx, conn, dbase.SessionInfo{Mode: "server-export"})
 	if err != nil {
 		return "", fmt.Errorf("create db processor: %w", err)
@@ -232,6 +296,30 @@ func (e *Engine) runPipeline(ctx context.Context, lg *slog.Logger, job *store.Ex
 	lg.InfoContext(ctx, "export pipeline finished", "took", time.Since(start))
 
 	return outputDir, nil
+}
+
+// tryBuildResumeList attempts to read latest timestamps from the database
+// for resume. Returns nil if the tables don't exist yet (first run).
+func tryBuildResumeList(ctx context.Context, lg *slog.Logger, conn *sqlx.DB) *structures.EntityList {
+	mr := repository.NewMessageRepository()
+	itm, err := mr.LatestMessages(ctx, conn)
+	if err != nil {
+		lg.InfoContext(ctx, "no existing data in namespace (first run or empty)", "error", err)
+		return nil
+	}
+	m := make(map[structures.SlackLink]time.Time)
+	for msg, err := range itm {
+		if err != nil {
+			lg.WarnContext(ctx, "error reading latest messages for resume", "error", err)
+			return nil
+		}
+		sl := structures.SlackLink{Channel: msg.ChannelID}
+		m[sl] = fasttime.Int2Time(msg.ID)
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return buildResumeList(m, 7*24*time.Hour)
 }
 
 // buildResumeList converts a map of per-channel latest timestamps into an
