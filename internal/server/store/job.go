@@ -52,6 +52,15 @@ func (s *jobStore) ListByTenant(ctx context.Context, tenantID string) ([]*Export
 	return jobs, nil
 }
 
+func (s *jobStore) HasActive(ctx context.Context, tenantID string) (bool, error) {
+	var count int
+	const q = `SELECT COUNT(*) FROM EXPORT_JOB WHERE TENANT_ID = ? AND STATUS IN ('pending', 'running')`
+	if err := s.db.GetContext(ctx, &count, q, tenantID); err != nil {
+		return false, fmt.Errorf("job: has active: %w", err)
+	}
+	return count > 0, nil
+}
+
 func (s *jobStore) UpdateStatus(ctx context.Context, id, status, errorMsg string) error {
 	now := time.Now().UTC()
 	const q = `UPDATE EXPORT_JOB SET STATUS = ?, ERROR_MSG = ?, UPDATED_AT = ? WHERE ID = ?`

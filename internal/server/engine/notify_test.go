@@ -149,7 +149,8 @@ func (m *mockTenantStore) Get(_ context.Context, id string) (*store.Tenant, erro
 	return nil, fmt.Errorf("tenant: not found: %s", id)
 }
 
-func (m *mockTenantStore) Deactivate(context.Context, string) error { return nil }
+func (m *mockTenantStore) List(context.Context) ([]*store.Tenant, error) { return nil, nil }
+func (m *mockTenantStore) Deactivate(context.Context, string) error     { return nil }
 
 // mockCredStoreWithData implements store.CredentialStore with configurable data.
 type mockCredStoreWithData struct {

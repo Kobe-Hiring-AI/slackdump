@@ -40,6 +40,16 @@ func (s *tenantStore) Get(ctx context.Context, id string) (*Tenant, error) {
 	return &t, nil
 }
 
+func (s *tenantStore) List(ctx context.Context) ([]*Tenant, error) {
+	var tenants []*Tenant
+	const q = `SELECT ID, NAME, WORKSPACE, TEAM_ID, CREATED_AT, UPDATED_AT, ACTIVE
+		FROM TENANT WHERE ACTIVE = TRUE ORDER BY CREATED_AT DESC`
+	if err := s.db.SelectContext(ctx, &tenants, q); err != nil {
+		return nil, fmt.Errorf("tenant: list: %w", err)
+	}
+	return tenants, nil
+}
+
 func (s *tenantStore) Deactivate(ctx context.Context, id string) error {
 	now := time.Now().UTC()
 	const q = `UPDATE TENANT SET ACTIVE = FALSE, UPDATED_AT = ? WHERE ID = ?`

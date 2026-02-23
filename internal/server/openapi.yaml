@@ -38,6 +38,26 @@ tags:
 
 paths:
   /tenants:
+    get:
+      tags: [Tenants]
+      summary: List all tenants
+      description: |
+        Returns all active tenants, ordered by creation time (newest first).
+
+        **Requires admin authentication.**
+      responses:
+        '200':
+          description: List of tenants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/TenantResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       tags: [Tenants]
       summary: Register a new tenant
@@ -258,6 +278,27 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /tenants/{id}/exports/active:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+    get:
+      tags: [Exports]
+      summary: Check if export is running
+      description: Returns whether the tenant has any active (pending or running) export jobs.
+      responses:
+        '200':
+          description: Active export status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportActiveResponse'
+              example:
+                exporting: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
   /tenants/{id}/exports/{job_id}:
     parameters:
       - $ref: '#/components/parameters/TenantID'
@@ -279,6 +320,36 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+
+  /tenants/{id}/exports/{job_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/TenantID'
+      - $ref: '#/components/parameters/JobID'
+    post:
+      tags: [Exports]
+      summary: Cancel an export
+      description: |
+        Cancels a pending or running export job. Returns 409 if the job is
+        already completed or failed.
+      responses:
+        '200':
+          description: Export cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Job is not cancellable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /tenants/{id}/export/download:
     parameters:
@@ -513,6 +584,13 @@ components:
           type: string
           format: date-time
           description: When the job was created
+
+    ExportActiveResponse:
+      type: object
+      properties:
+        exporting:
+          type: boolean
+          description: Whether the tenant has any active (pending or running) export jobs
 
     ErrorResponse:
       type: object

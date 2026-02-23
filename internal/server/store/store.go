@@ -89,6 +89,7 @@ type Schedule struct {
 type TenantStore interface {
 	Create(ctx context.Context, t *Tenant) error
 	Get(ctx context.Context, id string) (*Tenant, error)
+	List(ctx context.Context) ([]*Tenant, error)
 	Deactivate(ctx context.Context, id string) error
 }
 
@@ -113,6 +114,7 @@ type JobStore interface {
 	Get(ctx context.Context, id string) (*ExportJob, error)
 	ListByTenant(ctx context.Context, tenantID string) ([]*ExportJob, error)
 	ListResumable(ctx context.Context) ([]*ExportJob, error)
+	HasActive(ctx context.Context, tenantID string) (bool, error)
 	UpdateStatus(ctx context.Context, id, status, errorMsg string) error
 	SetRunning(ctx context.Context, id string) error
 	SetCompleted(ctx context.Context, id, outputPath string) error

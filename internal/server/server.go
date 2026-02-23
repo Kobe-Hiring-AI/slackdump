@@ -17,6 +17,7 @@ import (
 // ExportEngine is the interface the server needs from the engine.
 type ExportEngine interface {
 	SubmitExport(ctx context.Context, job *store.ExportJob)
+	Cancel(jobID string)
 }
 
 // Server is the HTTP server for the multi-tenant Slackdump API.
@@ -82,6 +83,7 @@ func (s *Server) routes() chi.Router {
 		connectH := api.NewConnectHandler(s.tokenIssuer, s.cfg.SqldPublicURL)
 
 		r.Route("/tenants", func(r chi.Router) {
+			r.With(AdminOnly(s.cfg.AdminKey)).Get("/", tenantH.List)
 			r.With(AdminOnly(s.cfg.AdminKey)).Post("/", tenantH.Create)
 			r.Route("/{id}", func(r chi.Router) {
 				r.Get("/", tenantH.Get)
@@ -90,7 +92,9 @@ func (s *Server) routes() chi.Router {
 				r.Delete("/keys/{key_id}", apikeyH.Revoke)
 				r.Post("/exports", exportH.Create)
 				r.Get("/exports", exportH.List)
+				r.Get("/exports/active", exportH.Active)
 				r.Get("/exports/{job_id}", exportH.Get)
+				r.Post("/exports/{job_id}/cancel", exportH.Cancel)
 				r.Get("/export/download", downloadH.Download)
 				r.Get("/connect", connectH.Connect)
 				r.Get("/status", connectH.Status)

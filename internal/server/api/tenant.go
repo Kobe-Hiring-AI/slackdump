@@ -212,6 +212,29 @@ func (h *TenantHandler) Create(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// List handles GET /tenants (admin only).
+func (h *TenantHandler) List(w http.ResponseWriter, r *http.Request) {
+	tenants, err := h.store.Tenants.List(r.Context())
+	if err != nil {
+		slog.Error("list tenants", "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to list tenants")
+		return
+	}
+
+	resp := make([]TenantResponse, 0, len(tenants))
+	for _, t := range tenants {
+		resp = append(resp, TenantResponse{
+			ID:        t.ID,
+			Name:      t.Name,
+			Workspace: t.Workspace,
+			TeamID:    t.TeamID,
+			Active:    t.Active,
+			CreatedAt: t.CreatedAt,
+		})
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
 // Get handles GET /tenants/{id}.
 func (h *TenantHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

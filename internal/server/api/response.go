@@ -65,6 +65,11 @@ type ExportResponse struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
+// ExportActiveResponse is returned from the active export check endpoint.
+type ExportActiveResponse struct {
+	Exporting bool `json:"exporting"`
+}
+
 func respondError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
