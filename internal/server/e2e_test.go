@@ -35,10 +35,15 @@ func (m *e2eMockValidator) ValidateCookieOnly(_ context.Context, _, _ string) (s
 // e2eMockEngine implements ExportEngine for E2E tests.
 type e2eMockEngine struct {
 	submitted []*store.ExportJob
+	cancelled []string
 }
 
 func (m *e2eMockEngine) SubmitExport(_ context.Context, job *store.ExportJob) {
 	m.submitted = append(m.submitted, job)
+}
+
+func (m *e2eMockEngine) Cancel(jobID string) {
+	m.cancelled = append(m.cancelled, jobID)
 }
 
 func encKey() []byte {
@@ -325,6 +330,7 @@ func TestE2E_Auth_NoToken(t *testing.T) {
 		method string
 		path   string
 	}{
+		{"GET", "/tenants"},
 		{"POST", "/tenants"},
 		{"GET", "/tenants/some-id"},
 		{"DELETE", "/tenants/some-id"},
@@ -332,7 +338,9 @@ func TestE2E_Auth_NoToken(t *testing.T) {
 		{"DELETE", "/tenants/some-id/keys/some-key"},
 		{"POST", "/tenants/some-id/exports"},
 		{"GET", "/tenants/some-id/exports"},
+		{"GET", "/tenants/some-id/exports/active"},
 		{"GET", "/tenants/some-id/exports/some-job"},
+		{"POST", "/tenants/some-id/exports/some-job/cancel"},
 		{"GET", "/tenants/some-id/export/download"},
 	}
 
@@ -590,6 +598,105 @@ func TestE2E_MultipleExports(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	exports := decodeJSON[[]api.ExportResponse](t, resp)
 	assert.Len(t, exports, 4)
+}
+
+// TestE2E_ListTenants tests the admin-only tenant list endpoint.
+func TestE2E_ListTenants(t *testing.T) {
+	env := newE2EEnv(t)
+
+	// Create two tenants.
+	for _, name := range []string{"tenant-a", "tenant-b"} {
+		resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+			Name:       name,
+			SlackToken: "xoxc-" + name,
+		})
+		require.Equal(t, http.StatusCreated, resp.StatusCode)
+		resp.Body.Close()
+	}
+
+	// Admin can list tenants.
+	resp := env.doRequest(t, "GET", "/tenants", "admin-key", nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	tenants := decodeJSON[[]api.TenantResponse](t, resp)
+	assert.Len(t, tenants, 2)
+
+	// Tenant key should not be able to list tenants.
+	resp = env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		Name:       "tenant-c",
+		SlackToken: "xoxc-c",
+	})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	tenantC := decodeJSON[api.TenantResponse](t, resp)
+
+	resp = env.doRequest(t, "GET", "/tenants", tenantC.APIKey, nil)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	resp.Body.Close()
+}
+
+// TestE2E_CancelExport tests the cancel export endpoint.
+func TestE2E_CancelExport(t *testing.T) {
+	env := newE2EEnv(t)
+
+	// Create tenant.
+	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		Name:       "cancel-test",
+		SlackToken: "xoxc-test",
+	})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	tenant := decodeJSON[api.TenantResponse](t, resp)
+
+	// Create an export.
+	resp = env.doRequest(t, "POST", "/tenants/"+tenant.ID+"/exports", tenant.APIKey, api.ExportRequest{})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	export := decodeJSON[api.ExportResponse](t, resp)
+
+	// Cancel it.
+	resp = env.doRequest(t, "POST", "/tenants/"+tenant.ID+"/exports/"+export.ID+"/cancel", tenant.APIKey, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	cancelled := decodeJSON[api.ExportResponse](t, resp)
+	assert.Equal(t, "failed", cancelled.Status)
+	assert.Equal(t, "cancelled", cancelled.ErrorMsg)
+
+	// Cancel again should fail (not cancellable).
+	resp = env.doRequest(t, "POST", "/tenants/"+tenant.ID+"/exports/"+export.ID+"/cancel", tenant.APIKey, nil)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	resp.Body.Close()
+}
+
+// TestE2E_ActiveExport tests the active export check endpoint.
+func TestE2E_ActiveExport(t *testing.T) {
+	env := newE2EEnv(t)
+
+	// Create tenant (auto-triggers an export).
+	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		Name:       "active-test",
+		SlackToken: "xoxc-test",
+	})
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	tenant := decodeJSON[api.TenantResponse](t, resp)
+
+	// Should be active (auto-triggered export is pending).
+	resp = env.doRequest(t, "GET", "/tenants/"+tenant.ID+"/exports/active", tenant.APIKey, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	active := decodeJSON[api.ExportActiveResponse](t, resp)
+	assert.True(t, active.Exporting)
+
+	// Cancel all exports, then check again.
+	resp = env.doRequest(t, "GET", "/tenants/"+tenant.ID+"/exports", tenant.APIKey, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	exports := decodeJSON[[]api.ExportResponse](t, resp)
+	for _, ex := range exports {
+		if ex.Status == "pending" || ex.Status == "running" {
+			resp = env.doRequest(t, "POST", "/tenants/"+tenant.ID+"/exports/"+ex.ID+"/cancel", tenant.APIKey, nil)
+			require.Equal(t, http.StatusOK, resp.StatusCode)
+			resp.Body.Close()
+		}
+	}
+
+	resp = env.doRequest(t, "GET", "/tenants/"+tenant.ID+"/exports/active", tenant.APIKey, nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	active = decodeJSON[api.ExportActiveResponse](t, resp)
+	assert.False(t, active.Exporting)
 }
 
 // TestE2E_DownloadWrongTenant tests that a tenant can't download another's export.

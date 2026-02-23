@@ -35,10 +35,15 @@ func (m *mockValidator) ValidateCookieOnly(_ context.Context, _, _ string) (stri
 // mockEngine is a test export engine.
 type mockEngine struct {
 	submitted []*store.ExportJob
+	cancelled []string
 }
 
 func (m *mockEngine) SubmitExport(_ context.Context, job *store.ExportJob) {
 	m.submitted = append(m.submitted, job)
+}
+
+func (m *mockEngine) Cancel(jobID string) {
+	m.cancelled = append(m.cancelled, jobID)
 }
 
 func testStore(t *testing.T) *store.Store {
@@ -470,4 +475,125 @@ func TestDownloadHandler_Download_FileNotFound(t *testing.T) {
 	h.Download(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestTenantHandler_List(t *testing.T) {
+	s := testStore(t)
+	h := NewTenantHandler(s, encKey(), nil, nil)
+
+	// Create two tenants.
+	for _, id := range []string{"t-1", "t-2"} {
+		tenant := &store.Tenant{ID: id, Name: "Tenant " + id, Workspace: "ws", TeamID: "T1"}
+		require.NoError(t, s.Tenants.Create(context.Background(), tenant))
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/tenants", nil)
+	rec := httptest.NewRecorder()
+
+	h.List(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp []TenantResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Len(t, resp, 2)
+}
+
+func TestExportHandler_Cancel(t *testing.T) {
+	s := testStore(t)
+	engine := &mockEngine{}
+	h := NewExportHandler(s, engine)
+
+	tenant := &store.Tenant{ID: "t-1", Name: "Test", Workspace: "ws", TeamID: "T1"}
+	require.NoError(t, s.Tenants.Create(context.Background(), tenant))
+
+	job := &store.ExportJob{
+		ID:          "j-1",
+		TenantID:    "t-1",
+		Channels:    "general",
+		TriggeredBy: "api",
+	}
+	require.NoError(t, s.Jobs.Create(context.Background(), job))
+
+	req := httptest.NewRequest(http.MethodPost, "/tenants/t-1/exports/j-1/cancel", nil)
+	req = withChiParams(req, map[string]string{"id": "t-1", "job_id": "j-1"})
+	rec := httptest.NewRecorder()
+
+	h.Cancel(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp ExportResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "failed", resp.Status)
+	assert.Equal(t, "cancelled", resp.ErrorMsg)
+	assert.Len(t, engine.cancelled, 1)
+	assert.Equal(t, "j-1", engine.cancelled[0])
+}
+
+func TestExportHandler_Cancel_NotCancellable(t *testing.T) {
+	s := testStore(t)
+	engine := &mockEngine{}
+	h := NewExportHandler(s, engine)
+
+	tenant := &store.Tenant{ID: "t-1", Name: "Test", Workspace: "ws", TeamID: "T1"}
+	require.NoError(t, s.Tenants.Create(context.Background(), tenant))
+
+	job := &store.ExportJob{
+		ID:          "j-1",
+		TenantID:    "t-1",
+		Channels:    "general",
+		TriggeredBy: "api",
+		Status:      store.JobStatusCompleted,
+	}
+	require.NoError(t, s.Jobs.Create(context.Background(), job))
+
+	req := httptest.NewRequest(http.MethodPost, "/tenants/t-1/exports/j-1/cancel", nil)
+	req = withChiParams(req, map[string]string{"id": "t-1", "job_id": "j-1"})
+	rec := httptest.NewRecorder()
+
+	h.Cancel(rec, req)
+
+	assert.Equal(t, http.StatusConflict, rec.Code)
+}
+
+func TestExportHandler_Active(t *testing.T) {
+	s := testStore(t)
+	engine := &mockEngine{}
+	h := NewExportHandler(s, engine)
+
+	tenant := &store.Tenant{ID: "t-1", Name: "Test", Workspace: "ws", TeamID: "T1"}
+	require.NoError(t, s.Tenants.Create(context.Background(), tenant))
+
+	// No jobs — not active.
+	req := httptest.NewRequest(http.MethodGet, "/tenants/t-1/exports/active", nil)
+	req = withChiParams(req, map[string]string{"id": "t-1"})
+	rec := httptest.NewRecorder()
+
+	h.Active(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var resp ExportActiveResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.False(t, resp.Exporting)
+
+	// Create a pending job — should be active.
+	job := &store.ExportJob{
+		ID:          "j-1",
+		TenantID:    "t-1",
+		Channels:    "general",
+		TriggeredBy: "api",
+	}
+	require.NoError(t, s.Jobs.Create(context.Background(), job))
+
+	req = httptest.NewRequest(http.MethodGet, "/tenants/t-1/exports/active", nil)
+	req = withChiParams(req, map[string]string{"id": "t-1"})
+	rec = httptest.NewRecorder()
+
+	h.Active(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.True(t, resp.Exporting)
 }

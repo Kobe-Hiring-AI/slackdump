@@ -16,6 +16,7 @@ import (
 // ExportEngine is the interface the export handler needs from the engine.
 type ExportEngine interface {
 	SubmitExport(ctx context.Context, job *store.ExportJob)
+	Cancel(jobID string)
 }
 
 // ExportHandler handles export operations.
@@ -121,6 +122,79 @@ func (h *ExportHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, exportJobToResponse(job))
+}
+
+// Cancel handles POST /tenants/{id}/exports/{job_id}/cancel.
+func (h *ExportHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "id")
+	jobID := chi.URLParam(r, "job_id")
+
+	// Verify caller owns this tenant or is admin.
+	callerTenant := TenantFromContext(r.Context())
+	if callerTenant != "" && callerTenant != tenantID {
+		respondError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
+	job, err := h.store.Jobs.Get(r.Context(), jobID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			respondError(w, http.StatusNotFound, "export not found")
+			return
+		}
+		slog.Error("get export for cancel", "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to get export")
+		return
+	}
+
+	if job.TenantID != tenantID {
+		respondError(w, http.StatusNotFound, "export not found")
+		return
+	}
+
+	if job.Status != store.JobStatusPending && job.Status != store.JobStatusRunning {
+		respondError(w, http.StatusConflict, "job is not cancellable (status: "+job.Status+")")
+		return
+	}
+
+	h.engine.Cancel(jobID)
+
+	if err := h.store.Jobs.SetFailed(r.Context(), jobID, "cancelled"); err != nil {
+		slog.Error("set job failed after cancel", "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to update job status")
+		return
+	}
+
+	// Re-fetch the updated job.
+	job, err = h.store.Jobs.Get(r.Context(), jobID)
+	if err != nil {
+		slog.Error("get export after cancel", "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to get updated export")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, exportJobToResponse(job))
+}
+
+// Active handles GET /tenants/{id}/exports/active.
+func (h *ExportHandler) Active(w http.ResponseWriter, r *http.Request) {
+	tenantID := chi.URLParam(r, "id")
+
+	// Verify caller owns this tenant or is admin.
+	callerTenant := TenantFromContext(r.Context())
+	if callerTenant != "" && callerTenant != tenantID {
+		respondError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
+	active, err := h.store.Jobs.HasActive(r.Context(), tenantID)
+	if err != nil {
+		slog.Error("check active exports", "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to check active exports")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, ExportActiveResponse{Exporting: active})
 }
 
 func exportJobToResponse(j *store.ExportJob) ExportResponse {

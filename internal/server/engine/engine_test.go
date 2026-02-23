@@ -43,6 +43,8 @@ func (m *mockJobStore) ListResumable(context.Context) ([]*store.ExportJob, error
 	return m.resumable, m.resumeErr
 }
 
+func (m *mockJobStore) HasActive(context.Context, string) (bool, error) { return false, nil }
+
 // mockCredStore implements store.CredentialStore returning an error so that
 // RunExport fails fast (we only care that jobs get submitted).
 type mockCredStore struct{}

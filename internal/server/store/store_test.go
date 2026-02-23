@@ -71,6 +71,30 @@ func TestTenantGetNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
+func TestTenantList(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	// Create 2 tenants, deactivate 1.
+	createTestTenant(t, s, "t1")
+	createTestTenant(t, s, "t2")
+	require.NoError(t, s.Tenants.Deactivate(ctx, "t2"))
+
+	tenants, err := s.Tenants.List(ctx)
+	require.NoError(t, err)
+	assert.Len(t, tenants, 1)
+	assert.Equal(t, "t1", tenants[0].ID)
+}
+
+func TestTenantListEmpty(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+
+	tenants, err := s.Tenants.List(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, tenants)
+}
+
 func TestTenantDeactivate(t *testing.T) {
 	s := setupTestStore(t)
 	ctx := context.Background()
@@ -526,6 +550,32 @@ func TestJobListByTenant(t *testing.T) {
 	jobs, err = s.Jobs.ListByTenant(ctx, "t2")
 	require.NoError(t, err)
 	assert.Len(t, jobs, 1)
+}
+
+func TestJobHasActive(t *testing.T) {
+	s := setupTestStore(t)
+	ctx := context.Background()
+	createTestTenant(t, s, "t1")
+
+	// No jobs — not active.
+	active, err := s.Jobs.HasActive(ctx, "t1")
+	require.NoError(t, err)
+	assert.False(t, active)
+
+	// Create a pending job — active.
+	require.NoError(t, s.Jobs.Create(ctx, &ExportJob{
+		ID: "j1", TenantID: "t1", Channels: "C001", TriggeredBy: "manual",
+	}))
+	active, err = s.Jobs.HasActive(ctx, "t1")
+	require.NoError(t, err)
+	assert.True(t, active)
+
+	// Complete the job — not active.
+	require.NoError(t, s.Jobs.SetRunning(ctx, "j1"))
+	require.NoError(t, s.Jobs.SetCompleted(ctx, "j1", "/out"))
+	active, err = s.Jobs.HasActive(ctx, "t1")
+	require.NoError(t, err)
+	assert.False(t, active)
 }
 
 func TestJobUpdateStatus(t *testing.T) {
