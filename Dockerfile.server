@@ -1,0 +1,30 @@
+FROM golang:alpine AS build
+
+WORKDIR /build
+
+COPY . .
+
+ENV CGO_ENABLED=0
+
+RUN go build -ldflags="-s -w" -o slackdump-server ./cmd/slackdump-server
+
+FROM alpine:latest
+
+COPY --from=build /build/slackdump-server /usr/local/bin/slackdump-server
+
+RUN addgroup -S slackdump && adduser -S slackdump -G slackdump \
+   && mkdir -p /data && chown slackdump:slackdump /data
+
+RUN apk add --no-cache su-exec
+
+COPY <<EOF /entrypoint.sh
+#!/bin/sh
+chown -R slackdump:slackdump /data
+exec su-exec slackdump /usr/local/bin/slackdump-server
+EOF
+
+RUN chmod +x /entrypoint.sh
+
+EXPOSE 8080
+
+ENTRYPOINT ["/entrypoint.sh"]
