@@ -56,7 +56,7 @@ func TestIntegration_ExportJobStarts(t *testing.T) {
 		AdminKey:      "admin-key",
 		EncryptionKey: encryptionKey,
 		DataDir:       dataDir,
-	}, s, eng, &slackValidator{}, nil, nil, nil)
+	}, s, eng, &slackValidator{}, nil)
 
 	ts := httptest.NewServer(sv.srv.Handler)
 	t.Cleanup(ts.Close)

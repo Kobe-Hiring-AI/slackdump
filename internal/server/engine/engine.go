@@ -17,9 +17,7 @@ import (
 	"github.com/rusq/slackdump/v4/internal/chunk/backend/dbase/repository"
 	"github.com/rusq/slackdump/v4/internal/chunk/control"
 	"github.com/rusq/slackdump/v4/internal/client"
-	"github.com/rusq/slackdump/v4/internal/fasttime"
 	"github.com/rusq/slackdump/v4/internal/network"
-	serverauth "github.com/rusq/slackdump/v4/internal/server/auth"
 	"github.com/rusq/slackdump/v4/internal/server/storage"
 	"github.com/rusq/slackdump/v4/internal/server/store"
 	"github.com/rusq/slackdump/v4/internal/structures"
@@ -32,9 +30,7 @@ type Engine struct {
 	encryptionKey []byte
 	dataDir       string
 	pool          *WorkerPool
-	storage       storage.Storage        // file storage backend (filesystem or S3)
-	sqldURL       string                 // public sqld URL (empty = local SQLite mode)
-	tokenIssuer   *serverauth.TokenIssuer // for minting internal JWTs
+	storage       storage.Storage // file storage backend (filesystem or S3)
 }
 
 // New creates a new Engine. maxConcurrent controls how many export jobs can
@@ -50,19 +46,6 @@ func New(s *store.Store, encryptionKey []byte, dataDir string, maxConcurrent int
 		pool:          NewWorkerPool(maxConcurrent),
 		storage:       st,
 	}
-}
-
-// SetSqld configures the engine to write to sqld namespaces instead of local
-// SQLite files. If sqldURL is empty or issuer is nil, the engine falls back to
-// local file mode.
-func (e *Engine) SetSqld(sqldURL string, issuer *serverauth.TokenIssuer) {
-	e.sqldURL = sqldURL
-	e.tokenIssuer = issuer
-}
-
-// useSqld returns true if the engine is configured for remote sqld writes.
-func (e *Engine) useSqld() bool {
-	return e.sqldURL != "" && e.tokenIssuer != nil
 }
 
 // ResumeJobs finds any jobs left in pending or running state from a previous
@@ -194,56 +177,33 @@ func (e *Engine) runPipeline(ctx context.Context, lg *slog.Logger, job *store.Ex
 		),
 	).With("job_id", job.ID, "tenant_id", job.TenantID)
 
-	// 7. Open database connection (remote sqld or local SQLite).
+	// 7. Open database connection (local SQLite).
 	var conn *sqlx.DB
 	var list *structures.EntityList
 
-	if e.useSqld() {
-		lg.InfoContext(ctx, "using sqld remote database", "tenant_id", job.TenantID)
+	dbFile := filepath.Join(outputDir, "slackdump.sqlite")
 
-		// Mint an internal JWT for this tenant's namespace.
-		jwtToken, tokenErr := e.tokenIssuer.IssueInternal(job.TenantID)
-		if tokenErr != nil {
-			return "", fmt.Errorf("issue internal token: %w", tokenErr)
+	// Build resume list from existing local archive if present.
+	if _, statErr := os.Stat(dbFile); statErr == nil {
+		lg.InfoContext(ctx, "existing archive found, building resume list")
+		src, openErr := dbase.Open(ctx, dbFile)
+		if openErr != nil {
+			return "", fmt.Errorf("open existing archive: %w", openErr)
 		}
-		conn, err = openUserDB(e.sqldURL, jwtToken)
-		if err != nil {
-			return "", fmt.Errorf("open sqld namespace: %w", err)
+		latestMap, latestErr := src.Latest(ctx)
+		src.Close()
+		if latestErr != nil {
+			return "", fmt.Errorf("read latest timestamps: %w", latestErr)
 		}
-		defer conn.Close()
-
-		// Try to build resume list from remote database.
-		// This may fail on first run when tables don't exist yet.
-		list = tryBuildResumeList(ctx, lg, conn)
-		if list != nil {
-			lg.InfoContext(ctx, "resume list built from sqld", "channels", list.IncludeCount())
-		}
-	} else {
-		// Local SQLite mode.
-		dbFile := filepath.Join(outputDir, "slackdump.sqlite")
-
-		// Build resume list from existing local archive if present.
-		if _, statErr := os.Stat(dbFile); statErr == nil {
-			lg.InfoContext(ctx, "existing archive found, building resume list")
-			src, openErr := dbase.Open(ctx, dbFile)
-			if openErr != nil {
-				return "", fmt.Errorf("open existing archive: %w", openErr)
-			}
-			latestMap, latestErr := src.Latest(ctx)
-			src.Close()
-			if latestErr != nil {
-				return "", fmt.Errorf("read latest timestamps: %w", latestErr)
-			}
-			list = buildResumeList(latestMap, 7*24*time.Hour)
-			lg.InfoContext(ctx, "resume list built", "channels", list.IncludeCount())
-		}
-
-		conn, err = sqlx.Open(repository.Driver, dbFile)
-		if err != nil {
-			return "", fmt.Errorf("open export db: %w", err)
-		}
-		defer conn.Close()
+		list = buildResumeList(latestMap, 7*24*time.Hour)
+		lg.InfoContext(ctx, "resume list built", "channels", list.IncludeCount())
 	}
+
+	conn, err = sqlx.Open(repository.Driver, dbFile)
+	if err != nil {
+		return "", fmt.Errorf("open export db: %w", err)
+	}
+	defer conn.Close()
 
 	// 8. Parse channel filter and merge with resume list.
 	if channels := strings.TrimSpace(job.Channels); channels != "" {
@@ -296,30 +256,6 @@ func (e *Engine) runPipeline(ctx context.Context, lg *slog.Logger, job *store.Ex
 	lg.InfoContext(ctx, "export pipeline finished", "took", time.Since(start))
 
 	return outputDir, nil
-}
-
-// tryBuildResumeList attempts to read latest timestamps from the database
-// for resume. Returns nil if the tables don't exist yet (first run).
-func tryBuildResumeList(ctx context.Context, lg *slog.Logger, conn *sqlx.DB) *structures.EntityList {
-	mr := repository.NewMessageRepository()
-	itm, err := mr.LatestMessages(ctx, conn)
-	if err != nil {
-		lg.InfoContext(ctx, "no existing data in namespace (first run or empty)", "error", err)
-		return nil
-	}
-	m := make(map[structures.SlackLink]time.Time)
-	for msg, err := range itm {
-		if err != nil {
-			lg.WarnContext(ctx, "error reading latest messages for resume", "error", err)
-			return nil
-		}
-		sl := structures.SlackLink{Channel: msg.ChannelID}
-		m[sl] = fasttime.Int2Time(msg.ID)
-	}
-	if len(m) == 0 {
-		return nil
-	}
-	return buildResumeList(m, 7*24*time.Hour)
 }
 
 // buildResumeList converts a map of per-channel latest timestamps into an

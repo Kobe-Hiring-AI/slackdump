@@ -76,7 +76,7 @@ func TestTenantHandler_Create(t *testing.T) {
 	s := testStore(t)
 	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}
 	engine := &mockEngine{}
-	h := NewTenantHandler(s, encKey(), validator, engine, nil)
+	h := NewTenantHandler(s, encKey(), validator, engine)
 
 	body := `{"id":"t-create","name":"My Workspace","slack_token":"xoxc-test-token","slack_cookie":"xoxd-test-cookie"}`
 	req := httptest.NewRequest(http.MethodPost, "/tenants", bytes.NewBufferString(body))
@@ -105,7 +105,7 @@ func TestTenantHandler_Create_WithBotToken(t *testing.T) {
 	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}
 	engine := &mockEngine{}
 	key := encKey()
-	h := NewTenantHandler(s, key, validator, engine, nil)
+	h := NewTenantHandler(s, key, validator, engine)
 
 	body := `{"id":"t-bot","name":"Bot Workspace","slack_token":"xoxp-user","slack_bot_token":"xoxb-bot-token"}`
 	req := httptest.NewRequest(http.MethodPost, "/tenants", bytes.NewBufferString(body))
@@ -133,7 +133,7 @@ func TestTenantHandler_Create_WithoutBotToken(t *testing.T) {
 	s := testStore(t)
 	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}
 	engine := &mockEngine{}
-	h := NewTenantHandler(s, encKey(), validator, engine, nil)
+	h := NewTenantHandler(s, encKey(), validator, engine)
 
 	body := `{"id":"t-nobot","name":"No Bot","slack_token":"xoxp-user"}`
 	req := httptest.NewRequest(http.MethodPost, "/tenants", bytes.NewBufferString(body))
@@ -155,7 +155,7 @@ func TestTenantHandler_Create_WithoutBotToken(t *testing.T) {
 func TestTenantHandler_Create_MissingFields(t *testing.T) {
 	s := testStore(t)
 	validator := &mockValidator{workspace: "test-ws", teamID: "T123"}
-	h := NewTenantHandler(s, encKey(), validator, nil, nil)
+	h := NewTenantHandler(s, encKey(), validator, nil)
 
 	body := `{}`
 	req := httptest.NewRequest(http.MethodPost, "/tenants", bytes.NewBufferString(body))
@@ -168,7 +168,7 @@ func TestTenantHandler_Create_MissingFields(t *testing.T) {
 
 func TestTenantHandler_Get(t *testing.T) {
 	s := testStore(t)
-	h := NewTenantHandler(s, encKey(), nil, nil, nil)
+	h := NewTenantHandler(s, encKey(), nil, nil)
 
 	// Create a tenant.
 	tenant := &store.Tenant{ID: "t-1", Name: "Test", Workspace: "ws", TeamID: "T1"}
@@ -191,7 +191,7 @@ func TestTenantHandler_Get(t *testing.T) {
 
 func TestTenantHandler_Get_NotFound(t *testing.T) {
 	s := testStore(t)
-	h := NewTenantHandler(s, encKey(), nil, nil, nil)
+	h := NewTenantHandler(s, encKey(), nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/tenants/nonexistent", nil)
 	req = withChiParams(req, map[string]string{"id": "nonexistent"})
@@ -204,7 +204,7 @@ func TestTenantHandler_Get_NotFound(t *testing.T) {
 
 func TestTenantHandler_Delete(t *testing.T) {
 	s := testStore(t)
-	h := NewTenantHandler(s, encKey(), nil, nil, nil)
+	h := NewTenantHandler(s, encKey(), nil, nil)
 
 	tenant := &store.Tenant{ID: "t-1", Name: "Test", Workspace: "ws", TeamID: "T1"}
 	require.NoError(t, s.Tenants.Create(context.Background(), tenant))
@@ -224,7 +224,7 @@ func TestTenantHandler_Delete(t *testing.T) {
 
 func TestTenantHandler_Delete_NotFound(t *testing.T) {
 	s := testStore(t)
-	h := NewTenantHandler(s, encKey(), nil, nil, nil)
+	h := NewTenantHandler(s, encKey(), nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/tenants/nonexistent", nil)
 	req = withChiParams(req, map[string]string{"id": "nonexistent"})

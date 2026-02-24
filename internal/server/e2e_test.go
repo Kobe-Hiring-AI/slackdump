@@ -78,7 +78,7 @@ func newE2EEnv(t *testing.T) *e2eEnv {
 		AdminKey:      "admin-key",
 		EncryptionKey: encKey(),
 		DataDir:       dataDir,
-	}, s, engine, validator, nil, nil, nil)
+	}, s, engine, validator, nil)
 
 	ts := httptest.NewServer(sv.srv.Handler)
 	t.Cleanup(ts.Close)
@@ -607,6 +607,7 @@ func TestE2E_ListTenants(t *testing.T) {
 	// Create two tenants.
 	for _, name := range []string{"tenant-a", "tenant-b"} {
 		resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+			ID:         name,
 			Name:       name,
 			SlackToken: "xoxc-" + name,
 		})
@@ -622,6 +623,7 @@ func TestE2E_ListTenants(t *testing.T) {
 
 	// Tenant key should not be able to list tenants.
 	resp = env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-c",
 		Name:       "tenant-c",
 		SlackToken: "xoxc-c",
 	})
@@ -639,6 +641,7 @@ func TestE2E_CancelExport(t *testing.T) {
 
 	// Create tenant.
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-cancel",
 		Name:       "cancel-test",
 		SlackToken: "xoxc-test",
 	})
@@ -669,6 +672,7 @@ func TestE2E_ActiveExport(t *testing.T) {
 
 	// Create tenant (auto-triggers an export).
 	resp := env.doRequest(t, "POST", "/tenants", "admin-key", api.TenantRequest{
+		ID:         "tenant-active",
 		Name:       "active-test",
 		SlackToken: "xoxc-test",
 	})

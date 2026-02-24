@@ -8,8 +8,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/rusq/slackdump/v4/internal/server/api"
-	"github.com/rusq/slackdump/v4/internal/server/auth"
-	"github.com/rusq/slackdump/v4/internal/server/engine"
 	"github.com/rusq/slackdump/v4/internal/server/storage"
 	"github.com/rusq/slackdump/v4/internal/server/store"
 )
@@ -22,36 +20,26 @@ type ExportEngine interface {
 
 // Server is the HTTP server for the multi-tenant Slackdump API.
 type Server struct {
-	cfg         Config
-	store       *store.Store
-	engine      ExportEngine
-	validator   api.CredentialValidator
-	tokenIssuer *auth.TokenIssuer
-	sqldClient  *engine.SqldClient
-	storage     storage.Storage
-	srv         *http.Server
+	cfg       Config
+	store     *store.Store
+	engine    ExportEngine
+	validator api.CredentialValidator
+	storage   storage.Storage
+	srv       *http.Server
 }
 
 // NewServer creates and configures a new Server.
-// If issuer is nil and cfg.JWTPrivateKeyPath is set, NewServer will load the key
-// and create a TokenIssuer automatically. Pass a non-nil issuer to override.
-func NewServer(cfg Config, s *store.Store, eng ExportEngine, issuer *auth.TokenIssuer, st storage.Storage) *Server {
-	var sqld *engine.SqldClient
-	if cfg.SqldAdminURL != "" {
-		sqld = engine.NewSqldClient(cfg.SqldAdminURL)
-	}
-	return newServer(cfg, s, eng, &slackValidator{}, issuer, sqld, st)
+func NewServer(cfg Config, s *store.Store, eng ExportEngine, st storage.Storage) *Server {
+	return newServer(cfg, s, eng, &slackValidator{}, st)
 }
 
-func newServer(cfg Config, s *store.Store, eng ExportEngine, v api.CredentialValidator, issuer *auth.TokenIssuer, sqld *engine.SqldClient, st storage.Storage) *Server {
+func newServer(cfg Config, s *store.Store, eng ExportEngine, v api.CredentialValidator, st storage.Storage) *Server {
 	sv := &Server{
-		cfg:         cfg,
-		store:       s,
-		engine:      eng,
-		validator:   v,
-		tokenIssuer: issuer,
-		sqldClient:  sqld,
-		storage:     st,
+		cfg:       cfg,
+		store:     s,
+		engine:    eng,
+		validator: v,
+		storage:   st,
 	}
 
 	r := sv.routes()
@@ -76,11 +64,10 @@ func (s *Server) routes() chi.Router {
 		r.Use(JSONMiddleware)
 		r.Use(AuthMiddleware(s.store, s.cfg.AdminKey))
 
-		tenantH := api.NewTenantHandler(s.store, s.cfg.EncryptionKey, s.validator, s.engine, s.sqldClient)
+		tenantH := api.NewTenantHandler(s.store, s.cfg.EncryptionKey, s.validator, s.engine)
 		apikeyH := api.NewAPIKeyHandler(s.store)
 		exportH := api.NewExportHandler(s.store, s.engine)
 		downloadH := api.NewDownloadHandler(s.cfg.DataDir, s.store, s.storage)
-		connectH := api.NewConnectHandler(s.tokenIssuer, s.cfg.SqldPublicURL)
 
 		r.Route("/tenants", func(r chi.Router) {
 			r.With(AdminOnly(s.cfg.AdminKey)).Get("/", tenantH.List)
@@ -96,8 +83,6 @@ func (s *Server) routes() chi.Router {
 				r.Get("/exports/{job_id}", exportH.Get)
 				r.Post("/exports/{job_id}/cancel", exportH.Cancel)
 				r.Get("/export/download", downloadH.Download)
-				r.Get("/connect", connectH.Connect)
-				r.Get("/status", connectH.Status)
 			})
 		})
 	})
